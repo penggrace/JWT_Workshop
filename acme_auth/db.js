@@ -1,15 +1,16 @@
 const Sequelize = require("sequelize");
 //Require jwt in the database file*
 const jwt = require("jsonwebtoken");
-
-//Not sure? ****************
-
-const tokenSecret = process.env.JWT;
+const bcrypt = require("bcrypt");
 
 const { STRING } = Sequelize;
 const config = {
   logging: false,
 };
+
+const tokenSecret = process.env.JWT;
+const saltRounds = 10;
+
 
 if (process.env.LOGGING) {
   delete config.logging;
@@ -24,11 +25,19 @@ const User = conn.define("user", {
   password: STRING,
 });
 
+const Note = conn.define("note", {
+    text: STRING
+})
+
+Note.belongsTo(User);
+User.hasMany(Note);
+
+
 User.byToken = async (token) => {
   try {
     // const user = await User.findByPk(token);
     const verifiedToken = jwt.verify(token, tokenSecret);
-    const user = await User.findByPk(verifiedToken.id);
+    const user = await User.findByPk(verifiedToken.userId);
     if (user) {
       return user;
     }
@@ -46,12 +55,17 @@ User.authenticate = async ({ username, password }) => {
   const user = await User.findOne({
     where: {
       username,
-      password,
     },
   });
-  if (user) {
-    console.log("TOKEN SECRET--->", process.env.JWT);
-    return jwt.sign({ id: user.id, username: user.username }, tokenSecret);
+
+    const truePW = await bcrypt.compare(password, user.password);
+
+  if (truePW) {
+    const tokenGenerated = jwt.sign(
+        { userId: user.id },
+        tokenSecret
+    );
+    return tokenGenerated
   }
   const error = Error("bad credentials");
   error.status = 401;
@@ -65,9 +79,24 @@ const syncAndSeed = async () => {
     { username: "moe", password: "moe_pw" },
     { username: "larry", password: "larry_pw" },
   ];
+
+    const notes = [
+        { text: "hello world" },
+        { text: "reminder to buy groceries" },
+        { text: "reminder to do laundry" },
+    ];
+
   const [lucy, moe, larry] = await Promise.all(
     credentials.map((credential) => User.create(credential))
   );
+
+    const [note1, note2, note3] = await Promise.all(
+        notes.map((note) => Note.create(note))
+    );
+
+    await lucy.setNotes(note1);
+    await moe.setNotes([note2, note3]);
+
   return {
     users: {
       lucy,
@@ -76,6 +105,10 @@ const syncAndSeed = async () => {
     },
   };
 };
+
+User.beforeCreate(async (user) => {
+    user.password = await bcrypt.hash(user.password, saltRounds);
+});
 
 module.exports = {
   syncAndSeed,
